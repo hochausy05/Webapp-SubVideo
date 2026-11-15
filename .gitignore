@@ -1,0 +1,70 @@
+# Python virtual environments, bytecode, and tool caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Frontend dependencies, build output, and caches
+node_modules/
+frontend/dist/
+frontend/build/
+.vite/
+.next/
+.turbo/
+.cache/
+supabase/.temp/
+
+# Local environment files and secrets (keep the sanitized template)
+.env
+.env.*
+!.env.example
+
+# Generated media, processing scratch files, and local model downloads
+generated/
+outputs/
+artifacts/
+uploads/
+media/
+temp/
+tmp/
+*.tmp
+*.temp
+*.part
+*.onnx
+*.pt
+*.pth
+*.safetensors
+models/
+downloads/
+
+# Logs, IDE state, and operating-system files
+*.log
+logs/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Internal project documentation
+AGENTS.md
+RULES.md
+PLAN.md
+TASK.md
+CHANGELOG.md
+
+# Keep public documentation
+!README.md
+!UPDATES.md
