@@ -13,7 +13,7 @@ from google.genai import errors, types
 from pydantic import ValidationError
 
 from app.services.translation_prompts import GLOBAL_POLICY, PASS1, PASS2, PROMPT_VERSION
-from app.services.translation_validation import Pass1Response, Pass2Response, SourceSegment, validate_pass1, validate_pass2
+from app.services.translation_validation import Pass1Response, Pass2Response, SourceSegment, group_source_segments, validate_pass1, validate_pass2
 
 logger = logging.getLogger("autodub.translation")
 
@@ -94,14 +94,19 @@ class GeminiTranslator:
         raise AssertionError("unreachable")
 
     def translate(self, source: list[SourceSegment], source_language: str = "zh", progress: Callable[[str], None] = lambda _stage: None) -> tuple[list[dict[str, Any]], Usage]:
-        payload = {"source_language": source_language, "target_language": "vi", "segments": [s.model_dump(mode="json") for s in source]}
+        try:
+            groups = group_source_segments(source)
+        except ValueError as exc:
+            raise TranslationError("source_invalid", "Transcript nguồn không hợp lệ hoặc sai thứ tự.") from exc
+        payload = {"source_language": source_language, "target_language": "vi", "segments": [s.model_dump(mode="json") for s in source],
+                   "groups": [{"source_segment_ids": [str(s.id) for s in group]} for group in groups]}
         progress("translating_pass_1")
         pass1 = self._call("pass1", PASS1, payload, Pass1Response)
         progress("validating_pass_1")
         try:
-            units = validate_pass1(source, pass1)
+            units = validate_pass1(source, pass1, groups)
         except ValueError as exc:
-            raise TranslationError("pass1_coverage_invalid", "Pass 1 did not cover the source transcript exactly once.") from exc
+            raise TranslationError("pass1_grouping_invalid", "Gemini đã thay đổi nhóm Segment; bản dịch chưa được lưu. Hãy thử lại.") from exc
         payload2 = {"source_language": source_language, "target_language": "vi", "context": payload["segments"], "units": [
             {"unit_id": str(u.id), "source_segment_ids": [str(x) for x in u.source_segment_ids], "source_text": u.source_text,
              "translated_text": u.translated_text, "available_duration_ms": (u.end_us - u.start_us) // 1000} for u in units]}

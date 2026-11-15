@@ -395,10 +395,35 @@ def delete_project(project_id: uuid.UUID) -> Response:
     assets = db.select("media_assets", {"select": "id,storage_bucket,storage_path,status,write_lease_expires_at", "project_id": eq(str(project_id))})
     active_writes = [a for a in assets if a.get("write_lease_expires_at") and datetime.fromisoformat(a["write_lease_expires_at"].replace("Z", "+00:00")) > datetime.now(timezone.utc)]
     active_jobs = db.select("jobs", {"select": "id", "project_id": eq(str(project_id)), "status": "eq.running", "lease_expires_at": f"gt.{datetime.now(timezone.utc).isoformat()}"})
-    if active_writes or active_jobs:
+    # Even an expired TTS lease may still be finishing an interrupted Storage
+    # request. Keep the project and manifests until that Job is terminal.
+    active_tts = db.select("jobs", {"select":"id,lease_expires_at", "project_id":eq(str(project_id)), "kind":"eq.tts", "status":"eq.running", "limit":"1"})
+    if active_tts:
+        raise HTTPException(409, detail={"code":"tts_cleanup_waiting", "message":"TTS Job chưa dừng hoàn toàn. Hãy chờ Worker dừng, sau đó thử xóa lại; nếu vẫn kẹt, dừng launcher để kiểm tra an toàn."})
+    if active_writes or active_jobs or active_tts:
         return Response(status_code=202, content=b'{"deletion_state":"pending","message":"An upload or worker lease is active; retry deletion after it expires."}', media_type="application/json")
     cfg = get_settings()
     failures = []
+    # Every generated Storage path is recorded before upload, including failed
+    # and partial runs, so project deletion can clean them without guessing.
+    offset = 0
+    while True:
+        runs = db.select("tts_runs", {"select":"id", "project_id":eq(str(project_id)), "order":"id.asc", "limit":"100", "offset":str(offset)})
+        for run in runs:
+            asset_offset = 0
+            while True:
+                tts_assets = db.select("tts_artifacts", {"select":"storage_path,raw_storage_path", "run_id":eq(run["id"]), "order":"id.asc", "limit":"100", "offset":str(asset_offset)})
+                if tts_assets:
+                    paths = [path for a in tts_assets for path in (a["storage_path"],a.get("raw_storage_path")) if path]
+                    try: db.delete_storage_paths("autodub-private-tts", paths)
+                    except HTTPException: failures.append(run["id"])
+                if len(tts_assets) < 100: break
+                asset_offset += len(tts_assets)
+        if len(runs) < 100: break
+        offset += len(runs)
+    if failures:
+        db.patch("projects", {"id": eq(str(project_id))}, {"deletion_state": "failed", "deletion_error_code": "storage_cleanup_failed", "deletion_error_message": "TTS Storage cleanup failed; retry Project deletion."})
+        raise HTTPException(502, detail={"code":"storage_cleanup_failed", "message":"Không dọn được audio TTS; dữ liệu Project được giữ để thử lại."})
     for asset in assets:
         db.patch("media_assets", {"id": eq(asset["id"]), "status": f"in.({asset['status']},deletion_failed)"}, {"status": "deletion_pending"})
         try:

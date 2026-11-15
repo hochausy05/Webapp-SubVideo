@@ -1,6 +1,6 @@
 # AutoDub 2.0
 
-**Status: Project management, ASR and two-pass Gemini translation are implemented with real Demo2 data; browser workflow and owner acceptance remain pending. TTS, sync and rendering are not implemented.**
+**Status: Project management, ASR, two-pass Gemini translation and initial Supertonic TTS have been exercised with real Demo2 data; browser workflow and owner acceptance remain pending. Sync and rendering are not implemented.**
 
 AutoDub 2.0 is a fresh implementation plan for a local-first web application that translates source-video dialogue into concise Vietnamese narration, synthesizes offline audio, optimizes audio/video synchronization, and produces a verified MP4. The project intentionally begins from new source code rather than inheriting the previous AutoDub implementation.
 
@@ -14,11 +14,21 @@ AutoDub 2.0 is a fresh implementation plan for a local-first web application tha
 6. **Joint AV-Sync:** optimize measured speech durations together with video timing, retain natural pacing, and expose actionable conflicts by segment without hiding global blockers.
 7. **Verified output:** render MP4 from a validated immutable plan, probe the media, and make it available only after successful verification.
 
-TTS through verified output are planned capabilities. Project management, private source-media handling, ASR and translation are implemented; user-facing acceptance remains separately tracked.
+Project management, private source-media handling, ASR, translation and initial TTS are implemented. Incremental TTS reuse, sync and verified output remain future work; user-facing acceptance remains separately tracked.
+
+## Vietnamese voice generation
+
+Start `run.cmd`, open a Project with a saved translation, select a voice and one of five synthesis speeds below the video, and use **Nghe thử**. New Projects default to 1.25×; existing Projects retain the previous 1.05× setting. Choose **Tạo giọng đọc**, then open **TTS & đồng bộ** to observe progress and listen to generated units. Changing voice, speed or translation marks dependent audio stale. Audio is verified and stored in the private `autodub-private-tts` bucket. Supertonic 3 runs on CPU using the local `backend/.cache/tts/models` cache, configurable with `TTS_MODEL_DIR` in `backend/.env`; its [model license](https://huggingface.co/Supertone/supertonic-3) is OpenRAIL-M. Conservative trailing-silence processing retains the original if changed; it does not fit speech to video timing.
+
+TTS creation requires a saved, current Vietnamese translation with complete source mappings and groups of at most three Segments; creation is disabled while translation or TTS is running or when edits are unsaved. The TTS input collapses whitespace while keeping the saved text and punctuation intact; the installed SDK itself adds a terminal period when needed.
+
+Current limitations: unchanged units are not yet reused after a retry or edit, and a manually edited active translation cannot yet be replaced by a new run. Browser interaction, cancellation during inference and crash recovery require further verification. Project deletion returns a conflict while a TTS Job remains running, including an expired lease; safe recovery for the expired case is still pending. Do not delete tracked Storage objects manually. Owner acceptance of the Project workflow remains pending.
 
 The standalone translation CLI sends one existing active transcript through Gemini in two bulk passes without persisting results. Configure `GEMINI_API_KEY` in `backend/.env`; `GEMINI_MODEL` is optional and defaults to `gemini-2.5-flash`. From `backend`, run `.\.venv\Scripts\python.exe -m app.services.translation_cli --project-id <project-uuid>`. It calls the provider API, outputs translation data to the terminal, and rejects transcripts beyond its provisional bulk limit. Review model output against the source: structured validation cannot prove meaning was preserved.
 
 Run only one translation Worker for this deployment. A local lock and database claim guard limit concurrency, but distributed failure recovery has not been fully verified. The Worker uses a bounded subprocess and stops on provider quota/billing errors. It publishes a translation atomically only if its lease, source transcript and previous active run still match. Previously edited active translations are protected from automatic replacement. The Workspace editor batches changed `final_text` values with revisions; conflict preserves the draft. UI acceptance and long-transcript handling remain pending.
+
+New translation Jobs freeze consecutive ASR groups before Gemini, with at most three Segments and a four-second bound for multi-Segment groups. The complete transcript remains context. Conservative grouping currently requires explicit continuation punctuation; unpunctuated fragments remain separate. Existing runs are unchanged, and regenerating a manually edited active run remains blocked until explicit replacement with concurrency protection is supported. Real Gemini verification of this grouping remains pending.
 
 The Project Library contains the global header and footer. Opening a Project switches to a viewport-fitted workspace with a centered Back/four-tab navigation row, compact source-video details, and internally scrolling result or job-log panels. The workspace uses restrained Midnight Glass surfaces on a solid background and adapts to smaller screens.
 
@@ -44,7 +54,7 @@ From the project root on Windows, start all current services with one command:
 .\run.cmd
 ```
 
-The launcher starts FastAPI, Vite, the ASR Worker and the Translation Worker, checks health/RPC readiness and supervises their processes. Press Ctrl+C to stop them. In some Windows batch/PTY hosts, a `Terminate batch job (Y/N)?` prompt may appear after the services have stopped; answer `Y`. Existing processes on ports 8000 or 5173, or existing Workers, must be stopped before launch. The launcher does not install dependencies. For initial setup, install the pinned backend requirements into `backend/.venv`, run `npm ci` in `frontend`, and configure `backend/.env` as described below. The queue warning threshold is configurable as `VITE_WORKER_QUEUE_WARN_SECONDS` in the root `.env` (default 60 seconds).
+The launcher starts FastAPI, Vite, the ASR, Translation and TTS Workers, checks health/RPC readiness and supervises their processes. Press Ctrl+C to stop them. In some Windows batch/PTY hosts, a `Terminate batch job (Y/N)?` prompt may appear after the services have stopped; answer `Y`. Existing processes on ports 8000 or 5173, or existing Workers, must be stopped before launch. The launcher does not install dependencies. For initial setup, install the pinned backend requirements into `backend/.venv`, run `npm ci` in `frontend`, and configure `backend/.env` as described below. The queue warning threshold is configurable as `VITE_WORKER_QUEUE_WARN_SECONDS` in the root `.env` (default 60 seconds).
 
 Open `http://127.0.0.1:5173` for the Midnight Glass Project Library. Create, reopen, rename, and request deletion of Projects; open a stable `/projects/{id}/{tab}` URL with tabs Nhận diện & dịch, TTS & đồng bộ, Xuất video, and Nhật ký. Upload source video by clicking anywhere in the upload area or dropping a file there; choosing a valid file starts resumable TUS automatically, shows byte progress, resumes from the saved offset after retry, and refreshes server-side FFprobe metadata and private playback when complete. The detail page currently provides playback and metadata for an uploaded source; it has no replace-video action. Processing tabs intentionally show that later pipeline stages are not available yet. Refreshing preserves persisted Projects/media and the current route. The API base URL defaults to `http://127.0.0.1:8000`; set `VITE_API_BASE_URL` in the root `.env` to use another local address. To create a local environment file, run `Copy-Item .env.example .env` from the project root and edit only the values needed for local development. Keep `.env` out of Git.
 
@@ -91,8 +101,8 @@ Errors use `{"error":{"code":"...","message":"..."}}`. The current API intention
 | Worker | One separate local Python process | Faster-Whisper transcription worker with leases, heartbeat, cancellation and persisted Job attempts |
 | Metadata/access | Supabase Postgres with RLS and private media Storage | Five-table Phase 02 schema applied to `autodub` |
 | ASR | faster-whisper `small`, CUDA `float16` with one optional CPU `int8` fallback | Real 21-second Chinese video processed and 11 Segments persisted; this host fell back because cuBLAS is missing; owner transcript/browser acceptance pending |
-| Translation | Gemini two-pass contextual prompts, revisioned outputs | Intended; not connected |
-| Vietnamese speech | Supertonic 3 offline, local model | Intended; not installed |
+| Translation | Gemini two-pass contextual prompts, revisioned outputs | Connected and exercised on Demo2; browser acceptance pending |
+| Vietnamese speech | Supertonic 3 offline, local model | CPU generation and private persistence exercised on Demo2; incremental reuse and browser acceptance pending |
 | AV-Sync | Canonical timing planner and strict render validation | Planned; design constraints not fully agreed |
 | Export | FFmpeg + FFprobe with verified MP4 publication | Intended; not implemented |
 

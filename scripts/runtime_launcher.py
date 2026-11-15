@@ -103,13 +103,14 @@ def existing_workers() -> list[str]:
     # Inspect command lines locally; only return service names, never process details.
     query = ("$p=Get-CimInstance Win32_Process | Where-Object { "
              "$_.Name -match '^python(w)?\\.exe$' -and "
-             "$_.CommandLine -match '-m\\s+app\\.workers\\.(transcription_worker|translation_worker)' }; "
+             "$_.CommandLine -match '-m\\s+app\\.workers\\.(transcription_worker|translation_worker|tts_worker)' }; "
              "$p | ForEach-Object { if ($_.CommandLine -match 'transcription_worker') { 'ASR' } "
-             "elseif ($_.CommandLine -match 'translation_worker') { 'TRANSLATION' } } | Sort-Object -Unique")
+             "elseif ($_.CommandLine -match 'translation_worker') { 'TRANSLATION' } "
+             "elseif ($_.CommandLine -match 'tts_worker') { 'TTS' } } | Sort-Object -Unique")
     result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', query],
         capture_output=True, text=True, timeout=15, check=True,
         creationflags=subprocess.CREATE_NO_WINDOW)
-    return [line.strip() for line in result.stdout.splitlines() if line.strip() in {'ASR', 'TRANSLATION'}]
+    return [line.strip() for line in result.stdout.splitlines() if line.strip() in {'ASR', 'TRANSLATION', 'TTS'}]
 
 
 def start(service: Service, events: queue.Queue[tuple[str, str]]) -> None:
@@ -233,6 +234,7 @@ def main() -> int:
             Service('FRONTEND', [node, str(npm_cli), 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173', '--strictPort'], FRONTEND),
             Service('ASR', [str(PYTHON), '-m', 'app.workers.transcription_worker'], BACKEND, 'RUNTIME_READY kind=transcription'),
             Service('TRANSLATION', [str(PYTHON), '-m', 'app.workers.translation_worker'], BACKEND, 'RUNTIME_READY kind=translation'),
+            Service('TTS', [str(PYTHON), '-m', 'app.workers.tts_worker'], BACKEND, 'RUNTIME_READY kind=tts'),
         ]
         for index, service in enumerate(services):
             if STOP.is_set():

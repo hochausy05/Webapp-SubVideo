@@ -1,5 +1,8 @@
 # AutoDub 2.0 — Product Updates
 
+## v0.6.0 — 2026-11-16
+- Added CPU Supertonic 3 voice selection and preview, persisted TTS Jobs and private audio playback. Real Demo2 generation was exercised; browser acceptance, interrupted-Job recovery and incremental reuse remain pending. (TTS-01)
+
 ## v0.5.2 — 2026-11-15
 - Added a Windows `run.cmd` supervisor that starts and monitors the API, frontend, ASR Worker and Translation Worker together, with startup checks, bounded Worker restarts and queued-Job warnings. Terminal shutdown behavior remains under review. (CORE-RUN-01)
 

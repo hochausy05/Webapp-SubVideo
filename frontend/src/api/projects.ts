@@ -20,13 +20,37 @@ export interface Project {
   status: "active" | "deleting";
   source_language: string;
   target_language: string;
+  tts_voice_id: string;
+  tts_speed: number;
   source_video_asset_id: string | null;
   active_transcription_job_id: string | null;
+  active_translation_run_id: string | null;
   deletion_state: "none" | "pending" | "failed";
   deletion_error_message?: string | null;
   created_at: string;
   updated_at: string;
   source_video: MediaAsset | null;
+}
+
+export function setProjectVoice(projectId: string, voiceId: string): Promise<{ voice_id: string }> {
+  return request(`/projects/${encodeURIComponent(projectId)}/tts/voice`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice_id: voiceId }) });
+}
+
+export function getTtsReadiness(projectId: string): Promise<{ ready: boolean; code: string | null; message: string | null }> {
+  return request(`/projects/${encodeURIComponent(projectId)}/tts/readiness`);
+}
+
+export function setProjectSpeed(projectId: string, speed: number): Promise<{ speed: number }> {
+  return request(`/projects/${encodeURIComponent(projectId)}/tts/speed`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ speed }) });
+}
+
+export async function getVoicePreview(voiceId: string, speed: number, signal: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${API_ROOT}/tts/preview/${encodeURIComponent(voiceId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ speed }), signal });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as ApiErrorShape | null;
+    throw new ApiError(body?.error?.message ?? 'Không tạo được audio nghe thử.', response.status, body?.error?.code);
+  }
+  return response.blob();
 }
 
 export interface ProjectPage {
@@ -86,6 +110,12 @@ export interface TranslationUnit {
   source_segment_ids: string[]; final_text: string; pass1_text: string; pass2_text: string;
   needs_review: boolean; review_reason: string; revision: number;
 }
+export interface TtsItem { id: string; unit_id: string; position: number; final_text: string; duration_us: number; sample_rate: number; status: string; stale: boolean; original_samples: number | null; trimmed_samples: number }
+export interface TtsState { run: { id: string; voice_id: string; model: string } | null; items: TtsItem[]; latest_job: ProjectJob | null; stale: boolean }
+export function startTts(projectId: string): Promise<{job: ProjectJob; reused: boolean}> { return request(`/projects/${projectId}/tts`, {method:'POST'}); }
+export function getTtsState(projectId: string): Promise<TtsState> { return request(`/projects/${projectId}/tts`); }
+export function cancelTts(projectId: string, jobId: string): Promise<{ok: boolean}> { return request(`/projects/${projectId}/tts/${jobId}/cancel`, {method:'POST'}); }
+export function getTtsPlayback(projectId: string, artifactId: string, raw = false): Promise<{playback_url: string}> { return request(`/projects/${projectId}/tts/${artifactId}/playback${raw ? '?raw=true' : ''}`); }
 export interface TranslationState {
   run: { id: string } | null; units: TranslationUnit[]; latest_job: ProjectJob | null; stale: boolean;
 }

@@ -19,6 +19,8 @@ from filelock import FileLock, Timeout
 
 from app.core.config import BACKEND_ROOT
 from app.services.supabase import Supabase, eq
+from app.services.translation_validation import SourceSegment, validate_persisted_result
+from app.services.translation_prompts import PROMPT_VERSION
 from app.workers.transcription_worker import LeaseKeeper, TranscriptionWorker
 
 logger=logging.getLogger('autodub.translation.worker')
@@ -60,6 +62,8 @@ class TranslationWorker:
         process=None
         try:
             keeper.set_stage('Đang tải transcript nguồn')
+            if job['input_metadata'].get('prompt_version') != PROMPT_VERSION:
+                code='translation_version_changed'; message='Cấu hình dịch đã thay đổi; hãy tạo Job mới.'; return
             project=self.db.select('projects',{'select':'status,active_transcription_job_id','id':eq(job['project_id']),'limit':'1'})
             source=job['input_metadata']['transcription_job_id']
             if not project or project[0]['status'] != 'active' or project[0]['active_transcription_job_id'] != source:
@@ -100,6 +104,11 @@ class TranslationWorker:
                 elif event.get('event')=='complete': result=event
             if process.poll() is None: TranscriptionWorker._terminate_process_tree(process)
             if status=='cancelled' or result is None: return
+            try:
+                validated_source = [SourceSegment(id=uuid.UUID(s['id']), start_us=s['start_us'], end_us=s['end_us'], text=s['source_text']) for s in segments]
+                validate_persisted_result(validated_source, result['units'])
+            except (KeyError, TypeError, ValueError):
+                code='translation_grouping_invalid'; message='Kết quả có nhóm Segment hoặc timestamp không hợp lệ; bản dịch cũ được giữ.'; return
             keeper._observe_state()
             if keeper.should_cancel() or keeper.lost_event.is_set(): status='cancelled'; return
             keeper.set_stage('Đang lưu bản dịch')

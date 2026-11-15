@@ -8,6 +8,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.projects import router as projects_router
 from app.api.routes.transcriptions import router as transcriptions_router
 from app.api.routes.translations import router as translations_router
+from app.api.routes.tts import router as tts_router
 from app.core.config import get_settings
 
 
@@ -29,6 +30,7 @@ app.include_router(health_router)
 app.include_router(projects_router, prefix="/api/v1")
 app.include_router(transcriptions_router, prefix="/api/v1")
 app.include_router(translations_router, prefix="/api/v1")
+app.include_router(tts_router, prefix="/api/v1")
 
 
 if __name__ == "__main__":

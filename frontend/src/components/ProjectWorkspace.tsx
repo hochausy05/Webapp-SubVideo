@@ -26,6 +26,8 @@ import {
   type UploadConfig,
 } from "../api/projects";
 import { Icon, type IconName } from "./Icon";
+import { VoiceSelector } from "./VoiceSelector";
+import { TtsResults } from "./TtsResults";
 
 export type ProjectTab = "transcription" | "tts" | "export" | "logs";
 
@@ -268,7 +270,7 @@ function segmentTime(us: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
-function TranslationEditor({ projectId, transcriptAvailable, onSeek, onDirtyChange }: { projectId: string; transcriptAvailable: boolean; onSeek: (us: number) => void; onDirtyChange: (dirty: boolean) => void }) {
+function TranslationEditor({ projectId, transcriptAvailable, onSeek, onDirtyChange, onTranslationReady }: { projectId: string; transcriptAvailable: boolean; onSeek: (us: number) => void; onDirtyChange: (dirty: boolean) => void; onTranslationReady: (ready: boolean) => void }) {
   const [state, setState] = useState<TranslationState | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -276,6 +278,7 @@ function TranslationEditor({ projectId, transcriptAvailable, onSeek, onDirtyChan
   const [message, setMessage] = useState('');
   const dirty = state?.units.filter((unit) => drafts[unit.id] !== undefined && drafts[unit.id] !== unit.final_text) ?? [];
   const dirtyRef = useRef(false);
+  useEffect(() => { if (state) onTranslationReady(Boolean(state.run) && !state.stale); }, [state, onTranslationReady]);
   dirtyRef.current = dirty.length > 0;
   useEffect(() => { onDirtyChange(dirty.length > 0); return () => onDirtyChange(false); }, [dirty.length, onDirtyChange]);
   const refresh = useCallback(async () => {
@@ -316,10 +319,9 @@ function TranslationEditor({ projectId, transcriptAvailable, onSeek, onDirtyChan
     <div className="transcription-actions">
       {current ? <button type="button" className="button button-quiet" disabled={busy} onClick={() => void runAction(() => cancelTranslation(projectId, current.id))}>Hủy dịch</button> :
         <button type="button" className="button button-primary" disabled={!transcriptAvailable || busy || dirty.length > 0} onClick={() => {
-          if (state?.run && !window.confirm('Tạo bản dịch mới? Bản đang hoạt động được giữ cho đến khi bản mới hoàn tất.')) return;
+          if (state?.run && !window.confirm('Tạo bản dịch mới với nhóm tối đa 3 Segment? Bản cũ và audio được giữ; audio cũ sẽ không còn khớp khi bản mới được kích hoạt.')) return;
           void runAction(() => startTranslation(projectId));
         }}>Dịch bằng Gemini</button>}
-      {state?.run && <button type="button" className="button button-quiet" disabled={!dirty.length || busy || state.stale} onClick={() => void save()}>{busy ? 'Đang xử lý…' : `Lưu thay đổi${dirty.length ? ` (${dirty.length})` : ''}`}</button>}
     </div>
     {current && <div className="transcription-progress" role="status"><span className="spinner" />{current.status === 'queued' ? 'Đang chờ Worker' : (current.progress_message || 'Đang xử lý bản dịch')}</div>}
     {queuedTooLong && <p className="translation-review" role="status">Job đang chờ lâu. Hãy kiểm tra AutoDub đang chạy bằng .\run.cmd và Translation Worker đã kết nối.</p>}
@@ -330,12 +332,14 @@ function TranslationEditor({ projectId, transcriptAvailable, onSeek, onDirtyChan
     {state?.units.map((unit) => <article className="translation-unit" key={unit.id}>
       <button type="button" className="translation-source" onClick={() => onSeek(unit.start_us)}><time>{segmentTime(unit.start_us)} – {segmentTime(unit.end_us)}</time><span>{unit.source_text}</span></button>
       {unit.needs_review && <p className="translation-review">Cần xem lại: {unit.review_reason || 'Kiểm tra nghĩa và ngữ cảnh.'}</p>}
-      <textarea aria-label={`Bản dịch ${unit.position + 1}`} value={drafts[unit.id] ?? unit.final_text} onChange={(event) => setDrafts((previous) => ({ ...previous, [unit.id]: event.target.value }))} />
+      <textarea aria-label={`Bản dịch ${unit.position + 1}`} disabled={busy} value={drafts[unit.id] ?? unit.final_text} onChange={(event) => setDrafts((previous) => ({ ...previous, [unit.id]: event.target.value }))} />
     </article>)}
+    {state?.run && <div className="translation-save"><span>{dirty.length ? `${dirty.length} câu chưa lưu` : 'Không có thay đổi chưa lưu'}</span><button type="button" className="button button-primary" disabled={!dirty.length || busy || state.stale} onClick={() => void save()}>{busy ? 'Đang lưu…' : 'Lưu tất cả thay đổi'}</button></div>}
   </section>;
 }
 
-function TranscriptPanel({ projectId, activeJobId, sourceReady, onSeek, onTranslationSeek, onDirtyChange }: { projectId: string; activeJobId: string | null; sourceReady: boolean; onSeek: (timeUs: number) => void; onTranslationSeek: (timeUs: number) => void; onDirtyChange: (dirty: boolean) => void }) {
+function TranscriptPanel({ projectId, activeJobId, hasTranslation, sourceReady, onSeek, onTranslationSeek, onDirtyChange, onTranslationReady }: { projectId: string; activeJobId: string | null; hasTranslation: boolean; sourceReady: boolean; onSeek: (timeUs: number) => void; onTranslationSeek: (timeUs: number) => void; onDirtyChange: (dirty: boolean) => void; onTranslationReady: (ready: boolean) => void }) {
+  const [resultTab, setResultTab] = useState<'source' | 'translation'>(hasTranslation ? 'translation' : 'source');
   const [state, setState] = useState<TranscriptionState>({ active_job: null, latest_job: null });
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -405,6 +409,9 @@ function TranscriptPanel({ projectId, activeJobId, sourceReady, onSeek, onTransl
 
   return (
     <div className="transcript-surface">
+      <div className="eyebrow">KẾT QUẢ XỬ LÝ</div>
+      <div className="result-tabs" role="group" aria-label="Kết quả xử lý"><button type="button" aria-pressed={resultTab === 'source'} className={resultTab === 'source' ? 'result-tab--active' : ''} onClick={() => setResultTab('source')}>Bản nhận diện</button><button type="button" aria-pressed={resultTab === 'translation'} className={resultTab === 'translation' ? 'result-tab--active' : ''} onClick={() => setResultTab('translation')}>Bản dịch tiếng Việt</button></div>
+      <div hidden={resultTab !== 'source'}>
       <div className="transcription-controls">
         <div><div className="eyebrow">WHISPER · BẢN GHI NGUỒN</div><h2>Bản nhận diện</h2></div>
         <div className="transcription-actions">
@@ -437,7 +444,10 @@ function TranscriptPanel({ projectId, activeJobId, sourceReady, onSeek, onTransl
       </>}
       {!current && !latest && sourceReady && <EmptyState title="Chưa có bản nhận diện" description="Tạo Job để bắt đầu nhận diện tiếng nói bằng Faster-Whisper." />}
       {!sourceReady && current && <p className="muted-copy">Job hiện có: {current.status}</p>}
-      <TranslationEditor projectId={projectId} transcriptAvailable={Boolean(state.active_job || activeJobId)} onSeek={onTranslationSeek} onDirtyChange={onDirtyChange} />
+      </div>
+      <div hidden={resultTab !== 'translation'}>
+      <TranslationEditor projectId={projectId} transcriptAvailable={Boolean(state.active_job || activeJobId)} onSeek={onTranslationSeek} onDirtyChange={onDirtyChange} onTranslationReady={onTranslationReady} />
+      </div>
     </div>
   );
 }
@@ -457,6 +467,7 @@ function FeaturePlaceholder({ tab }: { tab: Exclude<ProjectTab, "transcription" 
 export function ProjectWorkspace({ projectId, tab, onTabChange, onBack, onTranslationDirtyChange, backendOnline, onRetryBackend }: { projectId: string; tab: ProjectTab; onTabChange: (tab: ProjectTab) => void; onBack: () => void; onTranslationDirtyChange: (dirty: boolean) => void; backendOnline: boolean; onRetryBackend: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [translationDirty, setTranslationDirty] = useState(false);
+  const [translationReady, setTranslationReady] = useState(false);
   useEffect(() => { onTranslationDirtyChange(translationDirty); }, [translationDirty, onTranslationDirtyChange]);
   const [playback, setPlayback] = useState<PlaybackAsset | null>(null);
   const [config, setConfig] = useState<UploadConfig | null>(null);
@@ -482,6 +493,7 @@ export function ProjectWorkspace({ projectId, tab, onTabChange, onBack, onTransl
     try {
       const value = await getProject(projectId);
       setProject(value);
+      setTranslationReady(Boolean(value.active_translation_run_id));
       if (value.source_video_asset_id && value.source_video?.status === "ready") {
         const source = await getSourcePlayback(projectId);
         setPlayback(source);
@@ -563,7 +575,7 @@ export function ProjectWorkspace({ projectId, tab, onTabChange, onBack, onTransl
               <div className="source-card-header"><div><div className="eyebrow">PROJECT · VIDEO NGUỒN</div><h2 title={project.name}>{project.name}</h2></div></div>
               {playback?.playback_url ? (
                 <>
-                  <div className="video-frame" style={videoFrameStyle}>
+                  <div className={`video-frame${aspectRatio < 1 ? ' video-frame--portrait' : ''}`} style={videoFrameStyle}>
                   <video ref={videoRef} key={playback.playback_url} src={playback.playback_url} controls playsInline preload="metadata" onLoadedMetadata={(event) => { const video = event.currentTarget; if (project.source_video_asset_id && video.videoWidth > 0 && video.videoHeight > 0) setVideoDimensions({ assetId: project.source_video_asset_id, width: video.videoWidth, height: video.videoHeight }); }} onError={handleVideoError} aria-label={`Video nguồn ${project.source_video?.original_filename ?? ""}`} />
                   </div>
                   {playbackError && <div className="player-error" role="alert"><Icon name="alert" size={15} /><span>{playbackError}</span><button className="text-link" type="button" onClick={() => void refreshPlayback()} disabled={refreshingPlayback}>{refreshingPlayback ? "Đang làm mới…" : "Lấy URL mới"}</button></div>}
@@ -583,13 +595,14 @@ export function ProjectWorkspace({ projectId, tab, onTabChange, onBack, onTransl
                 <UploadBox projectId={projectId} config={config} disabled={!backendOnline} onUploaded={uploadAndReload} />
               )}
             </section>
+            <VoiceSelector projectId={projectId} voiceId={project.tts_voice_id || 'M1'} speed={Number(project.tts_speed)} translationReady={translationReady} hasUnsavedEdits={translationDirty} onVoiceChange={(voice) => setProject((previous) => previous ? { ...previous, tts_voice_id: voice } : previous)} onSpeedChange={(speed) => setProject((previous) => previous ? { ...previous, tts_speed: speed } : previous)} />
           </aside>
 
           <section className="workspace-content glass-surface" aria-label={currentTab.label}>
             <div className="workspace-result-content">
-            {tab === "transcription" && <TranscriptPanel projectId={projectId} activeJobId={project.active_transcription_job_id} sourceReady={project.source_video?.status === "ready"} onSeek={seekVideo} onTranslationSeek={(timeUs) => { if (videoRef.current) videoRef.current.currentTime = timeUs / 1_000_000; }} onDirtyChange={setTranslationDirty} />}
+            {tab === "transcription" && <TranscriptPanel projectId={projectId} activeJobId={project.active_transcription_job_id} hasTranslation={Boolean(project.active_translation_run_id)} sourceReady={project.source_video?.status === "ready"} onSeek={seekVideo} onTranslationSeek={(timeUs) => { if (videoRef.current) videoRef.current.currentTime = timeUs / 1_000_000; }} onDirtyChange={setTranslationDirty} onTranslationReady={setTranslationReady} />}
 
-            {tab === "tts" && <FeaturePlaceholder tab="tts" />}
+            {tab === "tts" && <TtsResults projectId={projectId} voiceId={project.tts_voice_id || 'M1'} speed={Number(project.tts_speed)} />}
             {tab === "export" && <FeaturePlaceholder tab="export" />}
             {tab === "logs" && <div className="logs-surface"><JobLog projectId={projectId} /></div>}
             </div>

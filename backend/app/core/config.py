@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     asr_heartbeat_seconds: int = 30
     asr_model_cache_dir: Path = BACKEND_ROOT / ".cache" / "asr" / "models"
     asr_work_dir: Path = BACKEND_ROOT / ".cache" / "asr" / "jobs"
+    tts_model_dir: Path = BACKEND_ROOT / ".cache" / "tts" / "models"
 
     @field_validator("backend_host")
     @classmethod
@@ -54,6 +55,11 @@ class Settings(BaseSettings):
         if value not in {"localhost", "127.0.0.1", "::1"}:
             raise ValueError("Backend must bind to a loopback address in local development")
         return value
+
+    @field_validator("tts_model_dir")
+    @classmethod
+    def resolve_tts_model_dir(cls, value: Path) -> Path:
+        return value if value.is_absolute() else BACKEND_ROOT / value
 
     @field_validator("frontend_origin")
     @classmethod
